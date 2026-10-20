@@ -42,3 +42,97 @@ codegen/
 *.las
 *.prj
 *.asc
+
+/__OLD/Alta Frequenza 5 cm.2prj
+
+/__OLD/DATAPARSING.m
+
+/__OLD/LAS_to_ASCII_PRJ.m
+
+/__OLD/_BAYESIAN AUTOTUNING/BayesCfr.m
+
+/__OLD/_BAYESIAN AUTOTUNING/MAIN_AT.m
+
+/__OLD/_BAYESIAN AUTOTUNING/evaluateGroundFilterCostSmooth.m
+
+/__OLD/_BAYESIAN AUTOTUNING/evaluateGroundFilterCostSmooth2.m
+
+/__OLD/_BAYESIAN AUTOTUNING/evaluateGroundFilterCostSmooth_Pro.m
+
+/__OLD/_BAYESIAN AUTOTUNING/pipeline_ActiveLearningGroundFilter_Pro.m
+
+/__OLD/_BAYESIAN AUTOTUNING/pipeline_ActiveLearningGroundFilter_Pro2.m
+
+/__OLD/_BAYESIAN AUTOTUNING/step2_pipeline_ActiveLearningGroundFilter.m
+
+/__OLD/_GEOREFERENCE/OLD/GEOVEC4.m
+
+/__OLD/_GEOREFERENCE/OLD/geo4.m
+
+/__OLD/_GEOREFERENCE/OLD/geo5.m
+
+/__OLD/_GEOREFERENCE/OLD/georeference.m
+
+/__OLD/_GEOREFERENCE/OLD/georeference_3.m
+
+/__OLD/_GEOREFERENCE/OLD/georeference_new.m
+
+/__OLD/_GEOREFERENCE/OLD/helperClassify.m
+
+/__OLD/_GEOREFERENCE/OLD/helperClusterVeg.m
+
+/__OLD/_GEOREFERENCE/OLD/helperDetectTreeTops.m
+
+/__OLD/_GEOREFERENCE/OLD/helperExtractTreeMetrics.m
+
+/__OLD/_GEOREFERENCE/OLD/helperSegment.m
+
+/__OLD/_GEOREFERENCE/OLD/helperSegmentTrees.m
+
+/__OLD/_GEOREFERENCE/OLD/untitled3.m
+
+/__OLD/_GEOREFERENCE/OLD/verifydensity.m
+
+/__OLD/_GEOREFERENCE/georefPipeline.m
+
+/TerrainReport/AVT_Out/RSurf_Dim75x27m_Res8p40cm_Wc10m_V00.pdf
+
+/bestInterpParameters_cache.mat
+
+/bestParameters_cache.mat
+
+/files/TEST/DJI_202609301129_009/DJI_20260930112901_0001.CLC
+
+/files/TEST/DJI_202609301129_009/DJI_20260930112901_0001.CLI
+
+/files/TEST/DJI_202609301129_009/DJI_20260930112901_0001.CMI
+
+/files/TEST/DJI_202609301129_009/DJI_20260930112901_0001.IMU
+
+/files/TEST/DJI_202609301129_009/DJI_20260930112901_0001.LDR
+
+/files/TEST/DJI_202609301129_009/DJI_20260930112901_0001.RTB
+
+/files/TEST/DJI_202609301129_009/DJI_20260930112901_0001.RTK
+
+/files/TEST/DJI_202609301129_009/DJI_20260930112901_0001.RTL
+
+/files/TEST/DJI_202609301129_009/DJI_20260930112901_0001.RTS
+
+/fun/old/interpolate_Spatial_Standard.m
+
+/fun/old/old_pipeline_ActiveLearningGroundFilter.m
+
+/fun/old/old_step2b_visualizeDenoising.m
+
+/fun/old/old_step3_extractRoad.m
+
+/fun/old/old_step3_selectAOI.m
+
+/fun/old/test_approach1_RandomForest.m
+
+/fun/old/test_approach2_DeepLearning.m
+
+/fun/old/trainRoadClassifier.m
+
+*.mat
