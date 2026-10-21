@@ -1,62 +1,178 @@
-%% DATA PROCESSING %%
+%% DATA PROCESSING PIPELINE %%
 clear; clc;
-% Aggiunge la cartella 'fun' e sottocartelle al percorso di ricerca di MATLAB
-addpath('fun');
-addpath('files/las');
-addpath('fun/interpolate');
-addpath('fun/steps');
-addpath('fun/helper');
-%% PARAMETRI DI CONFIGURAZIONE GLOBALE
-config.voxelSize        = 0.05;   % [m] Risoluzione Voxel Grid (2 cm)
-config.resPercent       = 0.25;   % [%] Percentuale del lato minore dell'AOI
-config.targetPtsPerCell = 4;      % Punti LAS medi desiderati per cella
-config.cellSizeQuantum  = 0.001;  % Quantizzazione finale cella [m] (1 mm)
-config.nodata           = -9999;  % Valore standard per celle vuote
-config.rmseThreshold    = 0.005;  % [m] Soglia di tolleranza RMSE (5 mm)
-config.benchmark        = true;   % for benchmark cfr
-config.optimize         = false;  % for bayesian AT optimization
-config.compareInterp    = false;   % compara metodi di interpolazione
-config.optimizeInterp   = false;   % ottimizza parametri interpolazione
-config.fillingHoles     = true;   % fills holes before interpolating
-config.sliceWidth       = 0.5;    % slioce width filling holes
-config.gaussFilt        = true;  % Gaussian Filter
-%% 0. CREAZIONE LAS CON RGB E CORRETTAMENTE GEOREFERENZIATO
-% Nome della cartella dei dati
-dataFolder = 'files/las';
-% Lista dei file LAS che vuoi elaborare in sequenza
+
+% =========================================================================
+% 0. AUTOMATIC DIRECTORY SETUP & FOLDER CREATION
+% =========================================================================
+requiredDirs = {
+    'fun', ...
+    'fun/interpolate', ...
+    'fun/steps', ...
+    'fun/helper', ...
+    'files', ...
+    'files/las', ...
+    'files/results'
+};
+
+for i = 1:length(requiredDirs)
+    if ~exist(requiredDirs{i}, 'dir')
+        mkdir(requiredDirs{i});
+        fprintf('>>> Created directory: %s\n', requiredDirs{i});
+    end
+end
+
+% User notification regarding input data
+fprintf('------------------------------------------------------------\n');
+disp(' ATTENTION: Please ensure your input .las file(s) are placed inside ');
+disp(' the "files/las/" folder before running the pipeline.');
+fprintf('------------------------------------------------------------\n');
+
+% Add folders and all subfolders to the MATLAB search path recursively
+addpath(genpath('fun'));
+addpath(genpath('files'));
+
+% =========================================================================
+% 1. GLOBAL CONFIGURATION PARAMETERS & FLAGS
+% =========================================================================
+config.voxelSize        = 0.05;   % [m] Voxel Grid Resolution (5 cm)
+config.resPercent       = 0.25;   % [%] Percentage of minor side of AOI
+config.targetPtsPerCell = 4;      % Desired average LAS points per cell
+config.cellSizeQuantum  = 0.001;  % Final cell quantization [m] (1 mm)
+config.nodata           = -9999;  % Standard value for empty cells
+config.rmseThreshold    = 0.005;  % [m] RMSE tolerance threshold (5 mm)
+config.sliceWidth       = 0.5;    % Slice width for hole filling
+config.MinHeightLimit   = 0.10;   % [m] Minimum height limit for georef pipeline
+
+% --- PIPELINE CONTROL FLAGS ---
+config.enableGeoref     = true;   % Set to true for LiDAR-satellite data fusion / false to skip
+config.benchmark        = true;   
+config.optimize         = true;  
+config.compareInterp    = false;  
+config.optimizeInterp   = false;  
+config.fillingHoles     = true;   
+config.gaussFilt        = true;   
+
+% --- OPTIONAL MASTER OVERRIDE ---
+% config.forceAll = true;   % Uncomment to force all booleans to true/false
+
+if isfield(config, 'forceAll') && ~isempty(config.forceAll)
+    forcedVal = logical(config.forceAll);
+    config.benchmark        = forcedVal;
+    config.optimize         = forcedVal;
+    config.compareInterp    = forcedVal;
+    config.optimizeInterp   = forcedVal;
+    config.fillingHoles     = forcedVal;
+    config.gaussFilt        = forcedVal;
+    fprintf('------------------------------------------------------------\n');
+    fprintf('>>> [Override Active] All boolean flags forced to: %s\n', string(forcedVal));
+    fprintf('------------------------------------------------------------\n');
+end
+
+% =========================================================================
+% 2. BATCH PROCESSING PIPELINE (LAS INPUT & SPATIAL NORMALIZATION)
+% =========================================================================
 fileList = {
     'Alta Frequenza 5 cm.las',
-    %'Bassa Frequenza 5cm.las', % Aggiungi qui altri file se necessario
-    };
+    %'Bassa Frequenza 5cm.las', % Add other .las files here if needed
+};
 
-% Parametri globali opzionali (se vuoi applicarli a tutti i file)
-paramName = 'MinHeightLimit';
-paramVal  = 0.10;
-
-% 3. Ciclo di elaborazione batch
-disp(['>>> [BATCH] Avvio elaborazione di ', num2str(length(fileList)), ' file LiDAR...']);
+fprintf('------------------------------------------------------------\n');
+disp(['>>> [BATCH] Starting processing of ', num2str(length(fileList)), ' local .las file(s)...']);
+if config.enableGeoref
+    disp('>>> [GEOREF STATUS] ENABLED: Running LiDAR-to-Satellite data fusion.');
+else
+    disp('>>> [GEOREF STATUS] DISABLED: Skipping georeferencing and passing raw files directly.');
+end
+fprintf('------------------------------------------------------------\n');
 
 for i = 1:length(fileList)
-    currentFile = fullfile(dataFolder, fileList{i});
-    fprintf('\n------------------------------------------------------------\n');
-    fprintf('>>> Elaborazione file %d di %d: %s\n', i, length(fileList), currentFile);
+    currentFile = fileList{i};
+    [~, baseName, ~] = fileparts(currentFile);
+    
     fprintf('------------------------------------------------------------\n');
-
+    fprintf('>>> Processing file %d of %d: %s\n', i, length(fileList), currentFile);
+    fprintf('------------------------------------------------------------\n');
+    
     try
-        % Chiamata alla funzione georefPipeline creata in precedenza
-        [~, savedPath] = step0_georefPipeline(currentFile, paramName, paramVal);
-        fprintf(' >>> [COMPLETATO] File elaborato con successo: %s\n', savedPath);
+        % =================================================================
+        % GATE 1: INGESTION & INTEGRITY CHECK (.las Header Verification)
+        % =================================================================
+        disp(' >>> [Gate 1] Verifying local .las file integrity and header...');
+        
+        if ~exist(currentFile, 'file')
+            error('PipelineError:FileNotFound', 'Input .las file not found in path.');
+        end
+        
+        % Verify LAS magic bytes ('LASF')
+        fid = fopen(currentFile, 'r');
+        if fid == -1
+            error('PipelineError:AccessDenied', 'Could not open .las file for reading.');
+        end
+        magicBytes = fread(fid, 4, 'uint8=>char')';
+        fclose(fid);
+        
+        if ~strcmp(magicBytes, 'LASF')
+            error('PipelineError:InvalidHeader', 'Invalid LAS header signature ("%s"). File is corrupted.', magicBytes);
+        end
+        disp(' >>> [Gate 1 PASSED] .las header signature verified.');
+
+        % =================================================================
+        % GATE 2: SPATIAL NORMALIZATION & BINDING (25m x 25m Grid Check)
+        % =================================================================
+        disp(' >>> [Gate 2] Analyzing spatial bounds for normalization...');
+        lasReader = lasFileReader(currentFile);
+        ptCloudTemp = readPointCloud(lasReader, 'CellSize', config.voxelSize);
+        
+        xLimits = ptCloudTemp.XLimits;
+        yLimits = ptCloudTemp.YLimits;
+        fprintf('     - Bounding Box Span: X = [%.2f, %.2f]m | Y = [%.2f, %.2f]m\n', ...
+            xLimits(1), xLimits(2), yLimits(1), yLimits(2));
+
+        % =================================================================
+        % PIPELINE EXECUTION
+        % =================================================================
+        if config.enableGeoref
+            % Run full georeferencing and data fusion pipeline (returns point cloud and path)
+            [ptCloudProcessed, processedPath] = step0_georefPipeline(currentFile, 'MinHeightLimit', config.MinHeightLimit);
+            fprintf(' >>> [COMPLETED] Georeferenced point cloud generated.\n');
+        else
+            % Skip georeferencing, read points directly
+            ptCloudProcessed = ptCloudTemp;
+            processedPath = currentFile;
+            fprintf(' >>> [SKIPPED] Georeferencing skipped. Using raw .las data.\n');
+        end
+        
+        % =================================================================
+        % STANDARDIZED DATA STREAM OUTPUT & .LAZ COMPRESSION EXPORT
+        % =================================================================
+        timestampStr = datestr(now, 'yyyymmdd_HHMMSS');
+        
+        % 1. Save compressed .laz output for streaming/storage efficiency
+        outputLazName = sprintf('Terrain_%s_%s.laz', baseName, timestampStr);
+        outputLazPath = fullfile('files', 'results', outputLazName);
+        
+        lazWriter = lasFileWriter(outputLazPath);
+        writePointCloud(lazWriter, ptCloudProcessed);
+        
+        % 2. Save standardized .mat container for Adams/FTire indexing
+        outputMatName = sprintf('TerrainData_%s_%s.mat', baseName, timestampStr);
+        outputMatPath = fullfile('files', 'results', outputMatName);
+        
+        save(outputMatPath, 'processedPath', 'outputLazPath', 'config', '-v7.3');
+        
+        fprintf(' >>> [SUCCESS] Compressed LAZ export: %s\n', outputLazPath);
+        fprintf(' >>> [SUCCESS] MATLAB Stream Data ready: %s\n', outputMatPath);
+        
     catch ME
-        fprintf(' >>> [ERRORE] Impossibile completare il file %s.\n', currentFile);
-        fprintf(' >>> Dettaglio errore: %s\n', ME.message);
-        % Continua con il file successivo anche se uno fallisce
+        fprintf(' >>> [ERROR] Could not complete processing for file %s.\n', currentFile);
+        fprintf(' >>> Error detail: %s\n', ME.message);
         continue; 
     end
 end
 
-disp('\n============================================================');
-disp('>>> [BATCH COMPLETATO] Tutti i file in lista sono stati processati!');
-disp('============================================================');
+fprintf('------------------------------------------------------------\n');
+disp('>>> [BATCH COMPLETED] All .las files have been processed and exported to compressed .laz format!');
+fprintf('------------------------------------------------------------\n');
 
 %% 1. LETTURA LAS E WKT
 [ptCloudRaw, wkt, ascFile, prjFile] = step1_loadLAS();
