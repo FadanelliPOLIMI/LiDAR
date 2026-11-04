@@ -1,786 +1,201 @@
-%% DATA PROCESSING PIPELINE %%
+%% DATA PROCESSIN2G & TACTICAL TRANSMISSION PIPELINE %%
 clear; clc;
+fprintf('\n--------------------------------------------\n');
+fprintf('BOOTSTRAPPING ENVIRONMENT & FOLDERS\n');
+fprintf('--------------------------------------------\n');
 
-% =========================================================================
-% 0. AUTOMATIC DIRECTORY SETUP & FOLDER CREATION
-% =========================================================================
-requiredDirs = {
-    'fun', ...
-    'fun/interpolate', ...
-    'fun/steps', ...
-    'fun/helper', ...
-    'files', ...
-    'files/las', ...
-    'files/results'
-};
-
+% 1. Automatically create required directories if they do not exist
+requiredDirs = {'fun', 'files', fullfile('files', 'configs')};
 for i = 1:length(requiredDirs)
     if ~exist(requiredDirs{i}, 'dir')
         mkdir(requiredDirs{i});
-        fprintf('>>> Created directory: %s\n', requiredDirs{i});
+        fprintf('  -> Created missing directory: %s\n', requiredDirs{i});
+    else
+        fprintf('  -> Verified directory exists: %s\n', requiredDirs{i});
     end
 end
 
-% User notification regarding input data
-fprintf('------------------------------------------------------------\n');
-disp(' ATTENTION: Please ensure your input .las file(s) are placed inside ');
-disp(' the "files/las/" folder before running the pipeline.');
-fprintf('------------------------------------------------------------\n');
-
-% Add folders and all subfolders to the MATLAB search path recursively
+% 2. Add subdirectories to MATLAB search path
 addpath(genpath('fun'));
 addpath(genpath('files'));
 
-% =========================================================================
-% 1. GLOBAL CONFIGURATION PARAMETERS & FLAGS
-% =========================================================================
-config.voxelSize        = 0.05;   % [m] Voxel Grid Resolution (5 cm)
-config.resPercent       = 0.25;   % [%] Percentage of minor side of AOI
-config.targetPtsPerCell = 4;      % Desired average LAS points per cell
-config.cellSizeQuantum  = 0.001;  % Final cell quantization [m] (1 mm)
-config.nodata           = -9999;  % Standard value for empty cells
-config.rmseThreshold    = 0.005;  % [m] RMSE tolerance threshold (5 mm)
-config.sliceWidth       = 0.5;    % Slice width for hole filling
-config.MinHeightLimit   = 0.10;   % [m] Minimum height limit for georef pipeline
+% 3. Initialize or load configuration safely
+config = initPipelineConfig();
 
-% --- PIPELINE CONTROL FLAGS ---
-config.enableGeoref     = true;   % Set to true for LiDAR-satellite data fusion / false to skip
-config.benchmark        = true;   
-config.optimize         = true;  
-config.compareInterp    = false;  
-config.optimizeInterp   = false;  
-config.fillingHoles     = true;   
-config.gaussFilt        = true;   
 
-% --- OPTIONAL MASTER OVERRIDE ---
-% config.forceAll = true;   % Uncomment to force all booleans to true/false
+fprintf('  -> Operating Mode: %s\n', upper(config.mode));
+fprintf('--------------------------------------------\n');
+%% 0. DATA SIMULATION
+% 0A. PIPELINE RUN WITH CHUNKED .LAZ DATA
+%[batchFiles, config] = step0a_runPipeline(config, 'FileName', 'Alta Frequenza 5 cm.las', 'Force', true);
+[~, config] = step0a_runPipeline(config,'Force', true);
+%ENDS WITH DATA CHUNKED FOR NEXT ANALYSIS
+% 0B. REASSEMBLE DATA
+step0b_reconstructTacticalBursts(config);
 
-if isfield(config, 'forceAll') && ~isempty(config.forceAll)
-    forcedVal = logical(config.forceAll);
-    config.benchmark        = forcedVal;
-    config.optimize         = forcedVal;
-    config.compareInterp    = forcedVal;
-    config.optimizeInterp   = forcedVal;
-    config.fillingHoles     = forcedVal;
-    config.gaussFilt        = forcedVal;
-    fprintf('------------------------------------------------------------\n');
-    fprintf('>>> [Override Active] All boolean flags forced to: %s\n', string(forcedVal));
-    fprintf('------------------------------------------------------------\n');
-end
+%% 1. LAS & WKT READING
+fprintf('\n--------------------------------------------\n');
+fprintf('STAGE 1: POINTCLOUD READING\n');
+fprintf('--------------------------------------------\n');
+%[ptCloudRaw, wkt, ascFile, prjFile] = step1_loadLAS(config);
+[ptCloudRaw, wkt, ascFile, prjFile] = step1_loadLAS(config, 'DataType', 'Reconstructed');
+%% 2. DYNAMIC PRE-FILTER: DENOISING STATISTICO (SOR) - VOXEL ADAPTATIVE DOWNSAMPLING - PCA
+fprintf('\n--------------------------------------------\n');
+fprintf('STAGE 2: UNIFIED PREPROCESSING & FEEDBACK GATE\n');
+fprintf('--------------------------------------------\n');
+% Run unified Stage 2 preprocessing
+[ptCloudFiltered,config, stage2Metrics] = step2_preFilter(ptCloudRaw, config);
 
-% =========================================================================
-% 2. BATCH PROCESSING PIPELINE (LAS INPUT & SPATIAL NORMALIZATION)
-% =========================================================================
-fileList = {
-    'Alta Frequenza 5 cm.las',
-    %'Bassa Frequenza 5cm.las', % Add other .las files here if needed
-};
+%% 3. AUTOMATIC / INTERACTIVE ROAD EXTRACTION
+fprintf('\n--------------------------------------------\n');
+fprintf('STAGE 3: ROAD EXTRACTION & GEOMETRIC ALIGNMENT\n');
+fprintf('--------------------------------------------\n');
+% Run unified Stage 3
+[ptCloudExtracted, ptCloudAligned, config, stage3Metrics] = step3_extractROI(ptCloudFiltered, config);
 
+%% 4. MASTER REFERENCE, CONDITIONAL INDEPENDENT OPTIMIZATION & BENCHMARKING
+fprintf('\n------------------------------------------------------------\n');
+fprintf('>>> STAGE 4: ROAD CLASSIFICATION & BENCHMARKING\n');
 fprintf('------------------------------------------------------------\n');
-disp(['>>> [BATCH] Starting processing of ', num2str(length(fileList)), ' local .las file(s)...']);
-if config.enableGeoref
-    disp('>>> [GEOREF STATUS] ENABLED: Running LiDAR-to-Satellite data fusion.');
-else
-    disp('>>> [GEOREF STATUS] DISABLED: Skipping georeferencing and passing raw files directly.');
-end
+[ptCloudRoad, winningMethod, benchmarkMetrics, bestHeuristicParams, rfModel] = step4_classFilters(ptCloudExtracted,ptCloudAligned, ptCloudFiltered, config);
+
+%% % 5. DOWNSTREAM ROAD EXTRACTION & EXPORT
+fprintf('\n------------------------------------------------------------\n');
+fprintf('>>> STAGE 5: ROAD SURFACE REFINEMENT & RASTERIZATION\n');
 fprintf('------------------------------------------------------------\n');
+ptCloudCleanRoad=step5_roadCutter(ptCloudRoad,config);
 
-for i = 1:length(fileList)
-    currentFile = fileList{i};
-    [~, baseName, ~] = fileparts(currentFile);
-    
-    fprintf('------------------------------------------------------------\n');
-    fprintf('>>> Processing file %d of %d: %s\n', i, length(fileList), currentFile);
-    fprintf('------------------------------------------------------------\n');
-    
-    try
-        % =================================================================
-        % GATE 1: INGESTION & INTEGRITY CHECK (.las Header Verification)
-        % =================================================================
-        disp(' >>> [Gate 1] Verifying local .las file integrity and header...');
-        
-        if ~exist(currentFile, 'file')
-            error('PipelineError:FileNotFound', 'Input .las file not found in path.');
-        end
-        
-        % Verify LAS magic bytes ('LASF')
-        fid = fopen(currentFile, 'r');
-        if fid == -1
-            error('PipelineError:AccessDenied', 'Could not open .las file for reading.');
-        end
-        magicBytes = fread(fid, 4, 'uint8=>char')';
-        fclose(fid);
-        
-        if ~strcmp(magicBytes, 'LASF')
-            error('PipelineError:InvalidHeader', 'Invalid LAS header signature ("%s"). File is corrupted.', magicBytes);
-        end
-        disp(' >>> [Gate 1 PASSED] .las header signature verified.');
-
-        % =================================================================
-        % GATE 2: SPATIAL NORMALIZATION & BINDING (25m x 25m Grid Check)
-        % =================================================================
-        disp(' >>> [Gate 2] Analyzing spatial bounds for normalization...');
-        lasReader = lasFileReader(currentFile);
-        ptCloudTemp = readPointCloud(lasReader, 'CellSize', config.voxelSize);
-        
-        xLimits = ptCloudTemp.XLimits;
-        yLimits = ptCloudTemp.YLimits;
-        fprintf('     - Bounding Box Span: X = [%.2f, %.2f]m | Y = [%.2f, %.2f]m\n', ...
-            xLimits(1), xLimits(2), yLimits(1), yLimits(2));
-
-        % =================================================================
-        % PIPELINE EXECUTION
-        % =================================================================
-        if config.enableGeoref
-            % Run full georeferencing and data fusion pipeline (returns point cloud and path)
-            [ptCloudProcessed, processedPath] = step0_georefPipeline(currentFile, 'MinHeightLimit', config.MinHeightLimit);
-            fprintf(' >>> [COMPLETED] Georeferenced point cloud generated.\n');
-        else
-            % Skip georeferencing, read points directly
-            ptCloudProcessed = ptCloudTemp;
-            processedPath = currentFile;
-            fprintf(' >>> [SKIPPED] Georeferencing skipped. Using raw .las data.\n');
-        end
-        
-        % =================================================================
-        % STANDARDIZED DATA STREAM OUTPUT & .LAZ COMPRESSION EXPORT
-        % =================================================================
-        timestampStr = datestr(now, 'yyyymmdd_HHMMSS');
-        
-        % 1. Save compressed .laz output for streaming/storage efficiency
-        outputLazName = sprintf('Terrain_%s_%s.laz', baseName, timestampStr);
-        outputLazPath = fullfile('files', 'results', outputLazName);
-        
-        lazWriter = lasFileWriter(outputLazPath);
-        writePointCloud(lazWriter, ptCloudProcessed);
-        
-        % 2. Save standardized .mat container for Adams/FTire indexing
-        outputMatName = sprintf('TerrainData_%s_%s.mat', baseName, timestampStr);
-        outputMatPath = fullfile('files', 'results', outputMatName);
-        
-        save(outputMatPath, 'processedPath', 'outputLazPath', 'config', '-v7.3');
-        
-        fprintf(' >>> [SUCCESS] Compressed LAZ export: %s\n', outputLazPath);
-        fprintf(' >>> [SUCCESS] MATLAB Stream Data ready: %s\n', outputMatPath);
-        
-    catch ME
-        fprintf(' >>> [ERROR] Could not complete processing for file %s.\n', currentFile);
-        fprintf(' >>> Error detail: %s\n', ME.message);
-        continue; 
-    end
-end
-
+%% % 6: SURFACE RECONSTRUCTION & HOLE INPAINTING
+fprintf('\n------------------------------------------------------------\n');
+fprintf('>>> STAGE 6: ROAD SURFACE RECONSTRUCTION\n');
 fprintf('------------------------------------------------------------\n');
-disp('>>> [BATCH COMPLETED] All .las files have been processed and exported to compressed .laz format!');
+[ptCloudFinalMerged, ptCloudSynthetic] = step6_fillRoadHoles(ptCloudCleanRoad, config);
+
+%% % 7: AREA OF INTEREST (ROI) SELECTION 
+fprintf('\n-------------------------------------------------------------n');
+fprintf('>>> STAGE 7: ROI SELECTION\n');
+fprintf('------------------------------------------------------------\n');
+% Optional: Pre-define bounding box limits in config if running headless
+% config.roiLimits = [20, 80, -3, 3]; % [xmin, xmax, ymin, ymax]
+ptCloudFinalROI = step7_selectROI(ptCloudFinalMerged, config);
+
+%% % 8: ROAD PROFILE RASTERIZATION FOR PROCESSING IN TERRAIN_REPORT
+fprintf('\n-------------------------------------------------------------n');
+fprintf('>>> STAGE 8: SMOOTHING AND RASTER\n');
+fprintf('------------------------------------------------------------\n');
+% Execute the unified processing and export function
+Zterrain = step8_exportTerrain(ptCloudFinalROI, config);
+%plotRaster(Zterrain,config)
+
+%% % 9: RUN TERRAIN_REPORT
+fprintf('\n------------------------------------------------------------\n');
+fprintf('>>> STAGE 9: RUN TERRAIN REPORT & EXPORT\n');
 fprintf('------------------------------------------------------------\n');
 
-%% 1. LETTURA LAS E WKT
-[ptCloudRaw, wkt, ascFile, prjFile] = step1_loadLAS();
-
-%% 2A. DENOISING STATISTICO (SOR)
-[X_clean, Y_clean, Z_clean, ptCloudClean] = step2a_denoiseSOR(ptCloudRaw);
-
-%% 2B. CONTROLLO ADATTIVO PRE-ML
-% Sfoltiamo e uniformiamo la nuvola all'inizio usando la risoluzione configurata.
-% Questo alleggerisce drasticamente la RAM per il Machine Learning e la PCA.
-% La funzione valuta l'RMSE e sceglie se usare i punti sfoltiti o densi anche a
-% seconda delle deviazioni e della densita
-fprintf('  -> Esecuzione controllo adattivo preventivo sulla nuvola pulita...\n');
-[X_work, Y_work, Z_work, rmseVal, maxErrorVal, ptCloudWork] = step2b_adaptiveVoxelCheck( ...
-    X_clean, Y_clean, Z_clean, config, ptCloudClean, false);
-fprintf('     Punti ridotti da %d a %d per ottimizzazione di sistema.\n', ptCloudClean.Count, ptCloudWork.Count);
-
-
-%% 3. ESTRAZIONE STRADA INTERATTIVA (Scelta Modulo)%% 
-paramsFile = 'bestParameters_cache.mat';
-if isfield(config, 'benchmark') && config.benchmark
-    % =========================================================================
-    % BAYESIAN AUTO-TUNING OPTIMIZATION PARAMS
-    % =========================================================================
-    % Controlliamo se l'utente vuole ricalcolarli o caricare la cache esistente
-    if isfield(config, 'optimize') && ~config.optimize && exist(paramsFile, 'file')
-        fprintf('  -> Caricamento parametri ottimali pre-salvati da: %s\n', paramsFile);
-        loadedData = load(paramsFile, 'bestParameters');
-        bestParameters = loadedData.bestParameters;
-    else
-        fprintf('\n>>> Ottimizzazione Bayesiana per AutoTuner...\n');
-        variables = [
-            optimizableVariable('binSize', [0.05, 0.5], 'Transform', 'log')
-            optimizableVariable('macroSize', [15.0, 35.0])       % Specifico Pro2
-            optimizableVariable('minSearchHeight', [0.05, 0.25])
-            optimizableVariable('K1', [10, 25], 'Type', 'integer')
-            optimizableVariable('K2', [40, 80], 'Type', 'integer')
-            optimizableVariable('maxNumSplits', [20, 60], 'Type', 'integer')
-            optimizableVariable('greenThreshold', [0.05, 0.60]) 
-            ];
-        
-        results = bayesopt(@(p) costFunctionAT(p, ptCloudRaw), variables, ...
-            'MaxObjectiveEvaluations', 40, 'UseParallel', true, 'Verbose', 0);
-        bestParameters = bestPoint(results);
-        save(paramsFile, 'bestParameters');
-        fprintf('  -> Parametri ottimali salvati con successo in: %s\n', paramsFile);
-    end
-    % =========================================================================
-    % BENCHMARK COMPARATIVO MULTI-METOD: Random Forest vs Deep Learning vs Active Learning
-    % =========================================================================
-    fprintf('>>> Avvio benchmark comparativo tra i 3 metodi di estrazione strada...\n');
-
-    if ~exist('ptCloudWork', 'var')
-        ptCloudWork = ptCloudRaw; 
-    end
-
-    % --- 1. ESECUZIONE METODO 3A: Random Forest Classico ---
-    fprintf('\n--- [1/3] Esecuzione Random Forest (3A) ---\n');
-    tic;
-    try
-        [ptCloudRoad_RF] = step3a_RandomForest(ptCloudWork);
-    catch ME
-        warning('Errore in Random Forest: %s. Creo nuvola vuota di fallback.', ME.message);
-        ptCloudRoad_RF = pointCloud([0 0 0]);
-    end
-    timeRF = toc;
-
-    % --- 2. Esecuzione METODO 3B: Deep Learning 3D (RandLA-Net) ---
-    fprintf('\n--- [2/3] Esecuzione Deep Learning 3D RandLA-Net(3B) ---\n');
-    tic;
-    try
-        [ptCloudRoad_DL] = step3b_DLRandLANet(ptCloudWork);
-    catch ME
-        warning('Errore in Deep Learning: %s. Creo nuvola vuota di fallback.', ME.message);
-        ptCloudRoad_DL = pointCloud([0 0 0]);
-    end
-    timeDL = toc;
-
-    % --- 3. Esecuzione METODO 3C: Active Learning / Pro2 ---
-    fprintf('\n--- [3/3] Esecuzione Active Learning Pro2 (3C) ---\n');
-    tic;
-    try
-        [ptCloudRoad_AL] = step3c_autoTunerFilter(ptCloudWork, 'min', bestParameters.binSize,...
-            bestParameters.macroSize,'road', bestParameters.minSearchHeight, bestParameters.K1,...
-            bestParameters.K2, bestParameters.maxNumSplits, bestParameters.greenThreshold, false);
-    catch ME
-        warning('Errore in Active Learning: %s. Creo nuvola vuota di fallback.', ME.message);
-        ptCloudRoad_AL = pointCloud([0 0 0]);
-    end
-    timeAL = toc;
-
-    % --- METRICHE QUANTITATIVE ---
-    xyz_rf = double(ptCloudRoad_RF.Location); 
-    if ~isempty(xyz_rf), zMAD_rf = median(abs(xyz_rf(:,3) - median(xyz_rf(:,3)))); else, zMAD_rf = 0; end
-
-    xyz_dl = double(ptCloudRoad_DL.Location); 
-    if ~isempty(xyz_dl), zMAD_dl = median(abs(xyz_dl(:,3) - median(xyz_dl(:,3)))); else, zMAD_dl = 0; end
-
-    xyz_al = double(ptCloudRoad_AL.Location); 
-    if ~isempty(xyz_al), zMAD_al = median(abs(xyz_al(:,3) - median(xyz_al(:,3)))); else, zMAD_al = 0; end
-
-    % --- TABELLA RISULTATI A TERMINALE ---
-    fprintf('\n======================== RISULTATI BENCHMARK COMPARATIVO ========================\n');
-    fprintf('METRICA                      | RANDOM FOREST (3A) | DEEP LEARNING (3B) | ACTIVE LEARNING (3C)\n');
-    fprintf('---------------------------------------------------------------------------------\n');
-    fprintf('Tempo di Esecuzione          | %6.2f sec        | %6.2f sec        | %6.2f sec        \n', timeRF, timeDL, timeAL);
-    fprintf('Punti Estratti (Strada)      | %8d           | %8d           | %8d           \n', ptCloudRoad_RF.Count, ptCloudRoad_DL.Count, ptCloudRoad_AL.Count);
-    fprintf('Percentuale sulla Nuvola     | %6.1f%%           | %6.1f%%           | %6.1f%%           \n', (ptCloudRoad_RF.Count/ptCloudWork.Count)*100, (ptCloudRoad_DL.Count/ptCloudWork.Count)*100, (ptCloudRoad_AL.Count/ptCloudWork.Count)*100);
-    fprintf('Planarità Asfalto (MAD Z)    | %6.4f m          | %6.4f m          | %6.4f m          \n', zMAD_rf, zMAD_dl, zMAD_al);
-    fprintf('=================================================================================\n');
-
-    % --- E. PLOT COMPARATIVO A 3 VIE (Gradato per altezza e interattivo) ---
-    fprintf('  -> Generazione confronto visivo tridimensionale a tre vie per MSC Adams...\n');
-    figBench = figure('Name', 'Benchmark Comparativo: RF (3A) vs DL (3B) vs AL (3C)', 'Color', 'w', 'Position', [50, 100, 1500, 600]);
-
-    % Subplot 1: Random Forest (Gradato Z)
-    ax1 = subplot(1, 3, 1);
-    if ptCloudRoad_RF.Count > 1
-        xyz_rf = ptCloudRoad_RF.Location;
-        pcshow(xyz_rf, xyz_rf(:,3), 'MarkerSize', 10, 'Parent', ax1);
-        colormap(ax1, jet);
-    end
-    title(sprintf('3A: Random Forest\nPunti: %d | MAD: %.4fm', ptCloudRoad_RF.Count, zMAD_rf), 'FontSize', 11, 'FontWeight', 'bold');
-    xlabel('X [m]'); ylabel('Y [m]'); zlabel('Z [m]'); 
-    grid on; axis equal; view(3);
-
-    % Subplot 2: Deep Learning (Gradato Z)
-    ax2 = subplot(1, 3, 2);
-    if ptCloudRoad_DL.Count > 1
-        xyz_dl = ptCloudRoad_DL.Location;
-        pcshow(xyz_dl, xyz_dl(:,3), 'MarkerSize', 10, 'Parent', ax2);
-        colormap(ax2, jet);
-    end
-    title(sprintf('3B: Deep Learning\nPunti: %d | MAD: %.4fm', ptCloudRoad_DL.Count, zMAD_dl), 'FontSize', 11, 'FontWeight', 'bold');
-    xlabel('X [m]'); ylabel('Y [m]'); zlabel('Z [m]'); 
-    grid on; axis equal; view(3);
-
-    % Subplot 3: Active Learning Pro2 (Gradato Z)
-    ax3 = subplot(1, 3, 3);
-    if ptCloudRoad_AL.Count > 1
-        xyz_al = ptCloudRoad_AL.Location;
-        pcshow(xyz_al, xyz_al(:,3), 'MarkerSize', 10, 'Parent', ax3);
-        colormap(ax3, jet);
-    end
-    title(sprintf('3C: Active Learning Pro2\nPunti: %d | MAD: %.4fm', ptCloudRoad_AL.Count, zMAD_al), 'FontSize', 11, 'FontWeight', 'bold');
-    xlabel('X [m]'); ylabel('Y [m]'); zlabel('Z [m]'); 
-    grid on; axis equal; view(3);
-
-    % Rende la finestra interattiva e non bloccante per il workspace
-    drawnow;
-    fprintf('>>> Benchmark e ottimizzazione completati con successo! (Puoi ruotare e zoomare i grafici 3D)\n');
+% 1. Ensure output directory exists
+if ~exist('AVT_Out', 'dir')
+    mkdir('AVT_Out');
 end
+
+% 1. Auto-crop outer NaN borders so we only analyze valid road data
+validRows = find(~all(isnan(Zterrain), 2));
+validCols = find(~all(isnan(Zterrain), 1));
+Z_cropped = Zterrain(min(validRows):max(validRows), min(validCols):max(validCols));
+
+% 2. Safe Local Fallback for Analysis Only:
+% If there are still micro-NaNs at the absolute jagged edges of the crop, 
+% fill them locally using nearest neighbor so pwelch doesn't crash, 
+% while leaving your master Zterrain untouched for simulations.
+Z_analysis = fillmissing(Z_cropped, 'nearest', 2);
+Z_analysis = fillmissing(Z_analysis, 'nearest', 1);
+
+% 3. Configure GIS structure using the clean analysis matrix
+GIS = struct();
+GIS.mode = 'real';
+GIS.units = 'm';
+GIS.Zmatrix = double(Z_analysis); 
+GIS.TrackWidth = 2.0;               % Vehicle track width [m]
+GIS.samplerate = 1 / config.voxelSize; 
+GIS.CutOff = 20.0;                  % Wavelength upper cutoff [m]
+GIS.wkt = wkt;
+GIS.Fext = {'mat','las', 'ply', 'rdf', 'crg','xyz','tif'}; 
+
+fprintf('  -> Executing TerrainReport_rectangular export routines...\n');
+%roadHullCoeffs = 
+TerrainReport_rectangular_old(GIS);
 
 fprintf('\n============================================\n');
-fprintf('SELEZIONE INTERATTIVA METODO ESTRAZIONE STRADA\n');
+fprintf('  SUCCESS: Simulation-ready files generated!\n');
+fprintf('  Extracted X-Exponent: %.2f\n', roadHullCoeffs.X_Exponent);
 fprintf('============================================\n');
 
-% Finestra di dialogo grafica per la scelta dell'utente
-choice = questdlg('Quale approccio desideri utilizzare per isolare la strada?', ...
-    'Selezione Metodo Estrazione', ...
-    'Random Forest (3A)', 'Deep Learning RandLANET(3B)', 'Active Learning (3C)', 'Random Forest (3A)');
-% Esecuzione condizionata in base alla scelta dell'utente
-switch choice
-    % 3A MACHINE LEARNING CLASSICO (Random Forest)
-    % Addestramento del modello + Applicazione per isolare la strada e rimuovere la vegetazione
-    case 'Random Forest (3A)'
-        fprintf('  -> Avvio Approccio 3A: Random Forest Classico (Parallelo)...\n');
-        [ptCloudRoad] = step3a_RandomForest(ptCloudWork);
-        % 3B. DEEP LEARNING 3D (RandLA-Net)
-    case 'Deep Learning RandLA-Net(3B)'
-        fprintf('  -> Avvio Approccio 3B: Deep Learning 3D (RandLA-Net)...\n');
-        [ptCloudRoad] = step3b_DLRandLANet(ptCloudWork);
-        % 3C AUTO-ENCODING (Active Learning & Pseudo-Labeling)
-    case 'Active Learning (3C)'
-        fprintf('  -> Avvio Approccio 3C: Active Learning & Valley Detection Pro...\n');
-        [ptCloudRoad] = step3c_autoTunerFilter(ptCloudWork);
-        % 3D. DEEP LEARNING 3D (PointNet++)
-    case 'Deep Learning PointNet++(3D)'
-        fprintf('  -> Avvio Approccio 3D: Deep Learning 3D (PointNet++)...\n');
-        % PROVA POINTENET++
-        % % 1. Ottieni la cartella in cui si trova attualmente lo script MAIN
-        % currentDir = pwd; % oppure mfilename('fullpath') se lo script è una funzione
-        % % 2. Fai 4 passi indietro nella gerarchia delle cartelle
-        % [parentDir1, ~] = fileparts(currentDir);
-        % [parentDir2, ~] = fileparts(parentDir1);
-        % [parentDir3, ~] = fileparts(parentDir2);
-        % [baseDir,    ~] = fileparts(parentDir3); % Questa è la cartella di arrivo dopo 4 passi indietro
-        % % 3. Da lì, scendi nella sottocartella LiDAR/PointNet++
-        % datafolder = fullfile(baseDir, 'LiDAR', 'PointNet++');
-        % % Verifica che il percorso esista effettivamente
-        % if isfolder(datafolder)
-        %     fprintf('Percorso impostato con successo: %s\n', datafolder);
-        % else
-        %     warning('Attenzione: La cartella non esiste: %s', datafolder);
-        % end
-        % dataFolder = fullfile('LiDAR', 'PointNet++');
-        % trainDataFolder = fullfile(dataFolder,'dales_las','train');
-        % testDataFolder = fullfile(dataFolder,'dales_las','test');
-        % lasReader = lasFileReader(fullfile(trainDataFolder,'5080_54435.las'));
-        % [pc,attr] = readPointCloud(lasReader,'Attributes','Classification');
-        % labels = attr.Classification;
-        % % Select only labeled data.
-        % pc = select(pc,labels~=0);
-        % labels = labels(labels~=0);
-        % classNames = [
-        %     "ground"
-        %     "vegetation"
-        %     "cars"
-        %     "trucks"
-        %     "powerlines"
-        %     "fences"
-        %     "poles"
-        %     "buildings"
-        %     ];
-        % figure;
-        % ax = pcshow(pc.Location,labels);
-        % helperLabelColorbar(ax,classNames);
-        % title("Point Cloud with Overlaid Semantic Labels");
-    otherwise
-        error('Processo interrotto: nessun metodo selezionato o finestra chiusa dall''utente.');
+%% 10. GESTIONE INCERTEZZA E MONTE CARLO (La nostra pipeline Master)
+[optimalRoadGrid, reportTable, stochasticVariations] = run_MasterBayesianRoadPipeline(ptCloudRoad, 0.1);
+
+%% 22. prova simscape
+% Specify the width of the road from the reference line.
+dataFolder = tempdir;
+lidarDataFileName = "DigitransData.zip"; 
+url = "https://ssd.mathworks.com/supportfiles/driving/data/" + lidarDataFileName;
+filePath = fullfile(dataFolder,lidarDataFileName); 
+if ~isfile(filePath)
+    websave(filePath,url,Timeout=100)
 end
+unzip(filePath,dataFolder)
 
-fprintf('--> [SUCCESSO] Variabile ptCloudRoad definita con successo: %d punti stradali isolati.\n', ptCloudRoad.Count);
+sensorData = load(fullfile(dataFolder,"sensorData.mat"));
 
-%% 4. ESTRAZIONE AUTOMATICA DELLA STRADA (Con controllo colore integrato)
-fprintf('Estrazione automatica del terreno e della strada...\n');
-[X_orig, Y_orig, Z_orig, xMin, yMin, xMax, yMax, ptCloudRoadAligned] = step4_alignRoadPCA(ptCloudRoad);
-fprintf('  -> Area stradale rilevata automaticamente: X[%.1f, %.1f], Y[%.1f, %.1f]\n', ...
-    xMin, xMax, yMin, yMax);
+traj = sensorData.traj;
+idx = 5 : traj.NumSamples - 4;
 
-%% 5A. INPAINTING GEOMETRICO DEI BUCHI STRADALI
-% Assicurati di definire il parametro nel blocco di configurazione iniziale:
-% config.fillingHoles = true; % (o false per saltarlo)
-% config.sliceWidth = 0.5;    % Ampiezza della fetta in metri
-
-if isfield(config, 'fillingHoles') && config.fillingHoles
-    fprintf('  -> [CONFIG] Inpainting geometrico attivato.\n');
-
-    % Se vuoi usare la versione bidirezionale che abbiamo fatto prima, 
-    % togli i controlli interni di config dalla funzione e lasciala snella.
-    [ptCloudReadyForInterp, addedPointsCount] = step5b_gapsDiagnostics(ptCloudRoadAligned, config.sliceWidth);
-
+traj = scenariobuilder.Trajectory(traj.Timestamps(idx), traj.Position(idx,:));
+NameValueArgs.Origin = [];
+ptCld = ptCloudFinalROI;
+if isempty(NameValueArgs.Origin)
+    centerPt = [mean(ptCld.XLimits), mean(ptCld.YLimits), mean(ptCld.ZLimits)];
 else
-    fprintf('  -> [CONFIG] Inpainting disattivato da configurazione. Salto il passaggio.\n');
-    ptCloudReadyForInterp = ptCloudRoadAligned;
-    addedPointsCount = 0;
+    centerPt = NameValueArgs.Origin;
 end
+transformedPointCloud = pctransform(ptCld, rigidtform3d([0,0,0],-centerPt));
 
-%% 5B. LAST GAUSSIAN FILTER (CANCELLA COLORI E INTENSITA)
-if isfield(config, 'gaussFilt') && config.gaussFilt
-    fprintf('  -> [CONFIG] Gaussian filter attivato: loss of color and intensity data.\n');
-    ptc = gaussFilt(ptCloudReadyForInterp);
-end
+ax = pcshow(transformedPointCloud.Location,ViewPlane="XY");
+hold(ax,"on")
+plot3(ax,traj.Position(:,1),traj.Position(:,2),traj.Position(:,3),LineWidth=5)
+xlabel(ax,"X-Axis")
+ylabel(ax,"Y-Axis")
+hold(ax,"off")
 
-%% 6. INTERPOLAZIONE E RASTERIZZAZIONE FINALE DELLA SUPERFICIE STRADALE
-% =========================================================================
-fprintf('\n============================================\n');
-fprintf('ELABORAZIONE SUPERFICIE E INTERPOLAZIONE (OTTIMIZZATA RAM-SAFE)\n');
-fprintf('============================================\n');
+roadWidthFromRefLine = 4;
 
-% Controllo variabili di configurazione e fallback di sicurezza
-if ~isfield(config, 'voxelSize'), config.voxelSize = 0.05; end
-if ~isfield(config, 'compareInterp'), config.compareInterp = false; end
-if ~isfield(config, 'optimizeInterp'), config.optimizeInterp = false; end
+% Specify a resolution of 6 cm in the longitudinal and 4.5 cm in the lateral direction.
+gridResolution = [0.06 0.045];
 
-interpParamsFile = 'bestInterpParameters_cache.mat';
-methodsList = {'bspl', 'spatial', 'spectral', 'tpaps', 'idw', 'mls', 'krg', 'rbf', 'st_opencrg'};
+% Smooth the road reference line to remove any jitters.
+%traj = smooth(traj,Method="sgolay",Degree=3,SmoothingFactor=0.2);
 
-% Gestione del Pool Parallelo Sicuro (Limitato a max 4 worker per proteggere la RAM)
-poolObj = gcp('nocreate');
-if isempty(poolObj) && (config.optimizeInterp || config.compareInterp)
-    try
-        numWorkers = min(4, feature('numcores'));
-        poolObj = parpool('local', numWorkers);
-        fprintf('  -> Pool parallelo avviato con %d worker (RAM-Safe).\n', numWorkers);
-    catch
-        warning('Impossibile avviare il pool parallelo. L''elaborazione proseguirà in seriale.');
-    end
-end
+% Generate the road surface.
+rsObj = roadSurface(transformedPointCloud,traj,roadWidthFromRefLine,gridResolution,NormalizeElevation=false,LocalOrigin=[0,0,0],ShowProgress=false);
+show(rsObj)
+% Specify t;he name of the OpenCRG file.
+filename = "digitransRoad.crg";
 
-% ---------------------------------------------------------
-% A. GESTIONE PARAMETRI (Ottimizzazione Bayesiana Parametri IDW & MLS)
-% ---------------------------------------------------------
-if config.optimizeInterp
-    fprintf('\n>>> Ottimizzazione Bayesiana parametri interpolazione (IDW p & MLS Radius) in corso...\n');
-    
-    variablesInterp = [
-        optimizableVariable('idwPower', [0.5, 4.0], 'Type', 'real') ...
-        optimizableVariable('searchRadiusMLS', [0.2, 2.0], 'Type', 'real')
-    ];
-    
-    costFcn = @(p) localCostFunctionInterpolation(p, ptCloudRoadAligned, config.voxelSize);
-    
-    resultsInterp = bayesopt(costFcn, variablesInterp, ...
-        'MaxObjectiveEvaluations', 15, ...
-        'UseParallel', ~isempty(poolObj), ...
-        'Verbose', 0);
-        
-    bestInterpParams = bestPoint(resultsInterp);
-    save(interpParamsFile, 'bestInterpParams');
-    fprintf('  -> Parametri di interpolazione salvati con successo in: %s\n', interpParamsFile);
-    fprintf('     * IDW Power (p) ottimale: %.3f\n', bestInterpParams.idwPower);
-    fprintf('     * MLS Search Radius ottimale: %.3f m\n', bestInterpParams.searchRadiusMLS);
-    
-elseif exist(interpParamsFile, 'file')
-    fprintf('  -> Caricamento parametri di interpolazione ottimali da cache: %s\n', interpParamsFile);
-    loadedInterpData = load(interpParamsFile, 'bestInterpParams');
-    bestInterpParams = loadedInterpData.bestInterpParams;
-else
-    bestInterpParams = struct('idwPower', 2.0, 'searchRadiusMLS', 0.6);
-end
-
-% ---------------------------------------------------------
-% B. SELEZIONE METODO: BENCHMARK PARALLELO SICURO SUI 9 METODI
-% ---------------------------------------------------------
-if config.compareInterp
-    fprintf('\n>>> Modalità Benchmark Interpolazioni Attiva (Confronto Parallelo su 9 Metodi - High Fidelity)...\n');
-    
-    numMethods = length(methodsList);
-    zMAD_interp = zeros(numMethods, 1);
-    timeInterp  = zeros(numMethods, 1);
-    Z_results   = cell(numMethods, 1);
-    X_results   = cell(numMethods, 1);
-    Y_results   = cell(numMethods, 1);
-    
-    % Copia locale dei dati per il trasferimento sicuro nel parfor
-    ptCloudInput = ptCloudRoadAligned;
-    vSize = config.voxelSize;
-    params = bestInterpParams;
-    
-    % Esecuzione in Parallelo del Benchmark sui 9 Metodi
-    parfor m = 1:numMethods
-        mName = methodsList{m};
-        tLocal = tic;
-        Z_q = []; X_q = []; Y_q = [];
-        
-        try
-            switch lower(mName)
-                case 'spatial'
-                    [Z_q, X_q, Y_q, ~] = interpolate_Spatial_Optimal(ptCloudInput, vSize);
-                case 'spectral'
-                    [X_q, Y_q, Z_q, ~] = interpolate_Spectral_FFT(ptCloudInput, vSize);
-                case 'tpaps'
-                    [X_q, Y_q, Z_q] = interpolate_ThinPlateSpline(ptCloudInput, vSize);
-                case 'idw'
-                    [X_q, Y_q, Z_q] = interpolate_IDW(ptCloudInput, vSize, params.idwPower);
-                case 'mls'
-                    [X_q, Y_q, Z_q] = interpolate_MovingLeastSquares(ptCloudInput, vSize, params.searchRadiusMLS);
-                case 'krg'
-                    [X_q, Y_q, Z_q] = interpolate_UniversalKriging(ptCloudInput, vSize);
-                case 'bspl'
-                    [X_q, Y_q, Z_q] = interpolate_BSplineSurface(ptCloudInput, vSize);
-                case 'rbf'
-                    [X_q, Y_q, Z_q] = interpolate_RBF(ptCloudInput, vSize);
-                case 'st_opencrg'
-                    [X_q, Y_q, Z_q, ~] = interpolate_ST_OpenCRG(ptCloudInput, vSize);
-            end
-        catch ME
-            warning('Metodo [%s] fallito (%s).', mName, ME.message);
-        end
-        
-        timeInterp(m) = toc(tLocal);
-        Z_results{m} = Z_q;
-        X_results{m} = X_q;
-        Y_results{m} = Y_q;
-        
-        if ~isempty(Z_q)
-            validZ = Z_q(~isnan(Z_q));
-            if ~isempty(validZ)
-                zMAD_interp(m) = median(abs(validZ - median(validZ)));
-            else
-                zMAD_interp(m) = NaN;
-            end
-        else
-            zMAD_interp(m) = NaN;
-        end
-    end
-    
-    % ---------------------------------------------------------
-    % RENDERING VISUALE 1: Griglia 3x3 delle Colormap 2D
-    % ---------------------------------------------------------
-    figInterpBench = figure('Name', 'Benchmark Completo Interpolazioni - Colormaps (9 Metodi)', ...
-        'Color', 'w', 'Position', [40, 40, 1600, 900]);
-        
-    for m = 1:numMethods
-        ax = subplot(3, 3, m);
-        Z_q = Z_results{m};
-        if ~isempty(Z_q)
-            imagesc(ax, Z_q); axis equal tight; colorbar; colormap(ax, jet);
-            title(sprintf('[%s]\nMAD: %.4fm | Tempo: %.2fs', upper(methodsList{m}), zMAD_interp(m), timeInterp(m)), ...
-                'FontSize', 9, 'FontWeight', 'bold');
-            xlabel('Cols (px)'); ylabel('Rows (px)');
-        else
-            title(sprintf('[%s] - FALLITO', upper(methodsList{m})), 'Color', 'r', 'FontSize', 9, 'FontWeight', 'bold');
-        end
-    end
-    drawnow;
-
-    % ---------------------------------------------------------
-    % RENDERING VISUALE 2: Gallerie 3D Affiancate per il Confronto Geometrico
-    % ---------------------------------------------------------
-    fig3DCompare = figure('Name', 'Confronto Geometrico 3D - Tutti i Metodi di Interpolazione', ...
-        'Color', 'w', 'Position', [100, 100, 1700, 950]);
-    
-    for m = 1:numMethods
-        ax3d = subplot(3, 3, m, 'Parent', fig3DCompare);
-        Z_q = Z_results{m};
-        X_q = X_results{m};
-        Y_q = Y_results{m};
-        
-        if ~isempty(Z_q) && ~isempty(X_q) && ~isempty(Y_q)
-            if isvector(X_q) && isvector(Y_q) && length(X_q) == size(Z_q, 2) && length(Y_q) == size(Z_q, 1)
-                [Xmesh, Ymesh] = meshgrid(X_q, Y_q);
-            else
-                Xmesh = X_q; Ymesh = Y_q;
-            end
-            
-            surf(ax3d, Xmesh, Ymesh, Z_q, 'EdgeColor', 'none');
-            shading(ax3d, 'interp');
-            lighting(ax3d, 'gouraud');
-            camlight(ax3d, 'headlight');
-            
-            title(ax3d, sprintf('[%s] (%.2fs)', upper(methodsList{m}), timeInterp(m)), 'FontSize', 9, 'FontWeight', 'bold');
-            xlabel(ax3d, 'X (m)'); ylabel(ax3d, 'Y (m)'); zlabel(ax3d, 'Z (m)');
-            view(ax3d, 45, 30);
-            grid(ax3d, 'on');
-        else
-            text(ax3d, 0.5, 0.5, 0.5, 'Dati non disponibili', 'HorizontalAlignment', 'center');
-            title(ax3d, sprintf('[%s]', upper(methodsList{m})));
-        end
-    end
-    drawnow;
-    
-    fprintf('>>> Benchmark interpolazioni e grafici comparativi completati con successo!\n');
-    
-    % Selezione automatica del metodo vincitore
-    [~, bestIdx] = min(zMAD_interp(~isnan(zMAD_interp)));
-    if isempty(bestIdx), bestIdx = 1; end
-    interpolationMethod = methodsList{bestIdx};
-    fprintf('--> Selezione automatica vincitrice dal benchmark: [%s]\n', upper(interpolationMethod));
-else
-    % Selezione Interattiva tramite GUI
-    [selectionIdx, ok] = listdlg('PromptString', 'Scegli il metodo di interpolazione per la superficie stradale:', ...
-        'SelectionMode', 'single', ...
-        'ListString', upper(methodsList), ...
-        'InitialValue', 2, ...
-        'Name', 'Selezione Interpolazione MSC Adams', ...
-        'ListSize', [300, 200]);
-    
-    if ok && ~isempty(selectionIdx)
-        interpolationMethod = methodsList{selectionIdx};
-    else
-        error('Processo interrotto: Nessun metodo di interpolazione selezionato.');
-    end
-end
-
-% ---------------------------------------------------------
-% C. ESECUZIONE FINALE CON IL METODO SELEZIONATO
-% ---------------------------------------------------------
-fprintf('\n  -> Calcolo superficie definitiva con metodo: [%s] (Passo: %.3fm)...\n', ...
-    upper(interpolationMethod), config.voxelSize);
-
-switch lower(interpolationMethod)
-    case 'spatial'
-        [Z_road, Xq, Yq, gridStruct] = interpolate_Spatial_Optimal(ptCloudRoadAligned, config.voxelSize);
-    case 'spectral'
-        [Xq, Yq, Z_road, ~] = interpolate_Spectral_FFT(ptCloudRoadAligned, config.voxelSize);
-    case 'tpaps'
-        [Xq, Yq, Z_road] = interpolate_ThinPlateSpline(ptCloudRoadAligned, config.voxelSize);
-    case 'idw'
-        [Xq, Yq, Z_road] = interpolate_IDW(ptCloudRoadAligned, config.voxelSize, bestInterpParams.idwPower);
-    case 'mls'
-        [Xq, Yq, Z_road] = interpolate_MovingLeastSquares(ptCloudRoadAligned, config.voxelSize, bestInterpParams.searchRadiusMLS);
-    case 'krg'
-        [Xq, Yq, Z_road] = interpolate_UniversalKriging(ptCloudRoadAligned, config.voxelSize);
-    case 'bspl'
-        [Xq, Yq, Z_road] = interpolate_BSplineSurface(ptCloudRoadAligned, config.voxelSize);
-    case 'rbf'
-        [Xq, Yq, Z_road] = interpolate_RBF(ptCloudRoadAligned, config.voxelSize);
-    case 'st_opencrg'
-        [Xq, Yq, Z_road, ~] = interpolate_ST_OpenCRG(ptCloudRoadAligned, config.voxelSize);
-    otherwise
-        [Z_road, Xq, Yq, gridStruct] = interpolate_Spatial_Optimal(ptCloudRoadAligned, config.voxelSize);
-end
-
-fprintf('  -> Matrice della superficie stradale calcolata correttamente (%dx%d nodi).\n', ...
-    size(Z_road, 1), size(Z_road, 2));
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-interpolationMethod = 'bspl'; % Opzioni: 'spatial', 'spectral', 'tpaps', 'idw', 'mls'
-
-switch lower(interpolationMethod)
-    case 'spatial'
-        [Xq, Yq, Z_road] = interpolate_Spatial_Standard(ptCloudRoadOnly, 0.1);
-    case 'spectral'
-        [Xq, Yq, Z_road, wavelength] = interpolate_Spectral_FFT(ptCloudRoadOnly, 0.1);
-    case 'tpaps'
-        [Xq, Yq, Z_road] = interpolate_ThinPlateSpline(ptCloudRoadOnly, 0.1);
-    case 'idw'
-        [Xq, Yq, Z_road] = interpolate_IDW(ptCloudRoadOnly, 0.1, 2);
-    case 'mls'
-        [Xq, Yq, Z_road] = interpolate_MovingLeastSquares(ptCloudRoadOnly, 0.1, 0.6);
-    case 'krg'
-        [Xq, Yq, Z_road] = interpolate_Spatial_Standard(ptCloudRoadOnly, 0.1);
-    case 'bspl'
-        [Xq, Yq, Z_road] = interpolate_BSplineSurface(ptCloudRoadOnly, 0.1);
-    case 'rbf'
-        [Xq, Yq, Z_road] = interpolate_RBF(ptCloudRoadOnly, 0.1);
-    case 'st_opencrg'
-        [Xq, Yq, Z_road, ~] = interpolate_ST_OpenCRG(ptCloudRoadOnly, 0.1);
-        % Nota: per s-t, Xq e Yq saranno Sq e Tq
-end
-
-
-
-
-
-
-
+% Export the road surface to an ASAM OpenCRG file.
+exportToASAMOpenCRG(rsObj,filename)
 
 %%
+pathToSimscapeVehicleTemplatesFile = fullfile('/home/simpa-nelli/Documents/MATLAB/PROJECTS/Examples/R2026b/Simscape-Vehicle-Templates-master.zip');
 
+% Specify the full path to the CRG File.
+crgFile = fullfile(pwd,filename);
 
+helperSetupSimscapeVehicleTemplates(pathToSimscapeVehicleTemplatesFile,crgFile)
 
+%%
+[Maneuver,Init] = helperConfigureSimulation(traj,Init,MDatabase);
 
+sm = simulation("sm_car");
+sm = setModelParameter(sm,StopTime="30");
+initialize(sm)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-% =========================================================
-% PARAMETRI GRIGLIA E RASTER (Semplificati e Deterministici)
-% =========================================================
-% Il cellSize viene ereditato direttamente dalla configurazione del Voxel Check
-cellSize = config.voxelSize; % es. 0.05 m (5 cm)
-nodata   = -9999;
-
-% Calcolo immediato dimensioni griglia sulla nuvola filtrata (X_final, Y_final, Z_final)
-minX = floor(min(X_final)); maxX = ceil(max(X_final));
-minY = floor(min(Y_final)); maxY = ceil(max(Y_final));
-
-ncols = ceil((maxX - minX) / cellSize);
-nrows = ceil((maxY - minY) / cellSize);
-
-fprintf('--> Griglia Raster deterministica creata: %d x %d celle (Passo: %.3f m)\n', ...
-    ncols, nrows, cellSize);
-
-
-
-%% 3. INTERPOLAZIONE, GESTIONE INCERTEZZA E MONTE CARLO (La nostra pipeline Master)
-[optimalRoadGrid, reportTable, stochasticVariations] = run_MasterBayesianRoadPipeline(ptCloudRoad, 0.1);
+start(sm)
+%%
