@@ -1,0 +1,2 @@
+Will write face vertex mesh data in ply format with optional color information. A by-product of ongoing computational materials science research at MINED@Gatech.([http://mined.gatech.edu/](http://mined.gatech.edu/))  
+Copyright (c) 2015, Ahmet Cecen and MINED@Gatech - All rights reserved.

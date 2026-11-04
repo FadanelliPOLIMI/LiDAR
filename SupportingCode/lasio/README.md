@@ -1,0 +1,2 @@
+Functions to read (LASread.m) and write (LASwrite.m) ASPRS LAS files (version 1.0 to 1.4). Supports Variable Length Records (VLR), Extended Variable Length Records (EVLR) and Extra byte fields.  
+Tested on Matlab R2017b and GNU Octave 4.2.1 (configured for "x86\_64-w64-mingw32").

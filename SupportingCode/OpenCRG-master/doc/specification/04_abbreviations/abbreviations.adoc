@@ -1,0 +1,28 @@
+[#top-abbreviations-abbreviations]
+= Abbreviations
+
+ifndef::include-only-once[]
+:root-path: ../
+include::{root-path}_config.adoc[]
+endif::[]
+
+API::
+Application Programming Interface
+
+ASAM::
+Association for Standardization of Automation and Measuring Systems
+
+CRG::
+Curved Regular Grid
+
+KDBI::
+kernel, double, binary, interchangeable
+
+KRBI::
+kernel, real, binary, interchangeable
+
+LDFI::
+long, double, formatted, interchangeable
+
+LRFI::
+long, real, formatted, interchangeable

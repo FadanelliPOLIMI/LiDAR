@@ -1,0 +1,65 @@
+name: CMake C-API multi-platform
+
+on:
+  push:
+    branches: [ "master" ]
+    paths:
+      - "c-api/**"
+  pull_request:
+    branches: [ "master" ]
+    paths:
+      - "c-api/**"
+
+jobs:
+  build-c-api:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # Set fail-fast to false to ensure that feedback is delivered for all matrix combinations. Consider changing this to true when the workflow is stable.
+      fail-fast: false
+
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        build_type: [Release]
+        c_compiler: [gcc, clang, cl]
+        include:
+          - os: windows-latest
+            c_compiler: cl
+            cpp_compiler: cl
+          - os: ubuntu-latest
+            c_compiler: gcc
+            cpp_compiler: g++
+          - os: ubuntu-latest
+            c_compiler: clang
+            cpp_compiler: clang++
+        exclude:
+          - os: windows-latest
+            c_compiler: gcc
+          - os: windows-latest
+            c_compiler: clang
+          - os: ubuntu-latest
+            c_compiler: cl
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set reusable strings
+      id: strings
+      shell: bash
+      run: |
+        SOURCE_DIR="${{ github.workspace }}/c-api"
+        echo "source-dir=$SOURCE_DIR" >> "$GITHUB_OUTPUT"
+        echo "build-output-dir=$SOURCE_DIR/build" >> "$GITHUB_OUTPUT"
+
+    - name: Configure CMake
+      run: >
+        cmake -B ${{ steps.strings.outputs.build-output-dir }}
+        -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
+        -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
+        ${{ runner.os != 'Windows' && format('-DCMAKE_BUILD_TYPE={0}', matrix.build_type) || '' }}
+        -S ${{ steps.strings.outputs.source-dir }}
+
+
+    - name: Build
+      # Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }}

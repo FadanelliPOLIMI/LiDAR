@@ -1,0 +1,28 @@
+:sectnums!:
+
+:antora_mapping: true
+
+[preface]
+include::00_preface/foreword.adoc[leveloffset=+1]
+[preface]
+include::00_preface/introduction.adoc[leveloffset=+1]
+
+:sectnums:
+include::01_scope/scope.adoc[leveloffset=+1]
+include::02_normative_references/2_0_Relations_to_other_standards.adoc[leveloffset=+1]
+include::03_terms_and_definitions/terms-and-definitions.adoc[leveloffset=+1]
+include::04_abbreviations/abbreviations.adoc[leveloffset=+1]
+include::05_backward_compatibility/backward-compatibility.adoc[leveloffset=+1]
+include::06_opencrg_data_format/6_0_Open_crg_data_format.adoc[leveloffset=+1]
+include::07_setting_up_the_opencrg_tools/7_0_Setting_up_the_OpenCRG_tools.adoc[leveloffset=+1]
+include::08_using_the_opencrg_tools/8_00_Using_the_OpenCRG_tools.adoc[leveloffset=+1]
+
+:sectnums!:
+[bibliography]
+include::bibliography.adoc[leveloffset=+1]
+
+// :sectnums!:
+// [appendix]
+// include::09_annexes/checker-rules.adoc[leveloffset=+1]
+
+:!antora_mapping:
