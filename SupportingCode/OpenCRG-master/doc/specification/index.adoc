@@ -1,0 +1,59 @@
+[#top-this-standard]
+:root-path: ./
+include::{root-path}_config.adoc[]
+//NOTE: All central attributes for Asciidoctor have to be defined in the _config.adoc AND in the antora.yml in the .antora folder in root
+= ASAM OpenCRG^®^ BS 2.0.1 Specification, 2026-05-20
+// DO NOT USE THE ATTRIBUTE {THIS_STANDARD} in the document title, it will break with Antora build pipeline!
+
+// DO NOT CHANGE!!!
+//
+:titleoffset!:
+:sectnums!:
+
+
+[IMPORTANT]
+.Disclaimer
+====
+Copyright 2026 ASAM e.V.
+
+This standard is published by ASAM e.V.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this document except in compliance with the License.
+
+You may obtain a copy of the License at: https://www.apache.org/licenses/LICENSE-2.0
+====
+
+ASAM OpenCRG is a registered trademark of ASAM e.V.
+
+//
+// DO NOT CHANGE!!!
+
+
+ifndef::use-antora-rules[]
+
+[preface]
+include::00_preface/foreword.adoc[leveloffset=+1]
+[preface]
+include::00_preface/introduction.adoc[leveloffset=+1]
+
+:sectnums:
+include::01_scope/scope.adoc[leveloffset=+1]
+include::02_normative_references/2_0_Relations_to_other_standards.adoc[leveloffset=+1]
+include::03_terms_and_definitions/terms-and-definitions.adoc[leveloffset=+1]
+include::04_abbreviations/abbreviations.adoc[leveloffset=+1]
+include::05_backward_compatibility/backward-compatibility.adoc[leveloffset=+1]
+include::06_opencrg_data_format/6_0_Open_crg_data_format.adoc[leveloffset=+1]
+include::07_setting_up_the_opencrg_tools/7_0_Setting_up_the_OpenCRG_tools.adoc[leveloffset=+1]
+include::08_using_the_opencrg_tools/8_00_Using_the_OpenCRG_tools.adoc[leveloffset=+1]
+
+:sectnums!:
+
+[bibliography]
+include::bibliography.adoc[leveloffset=+1]
+
+:sectnums!:
+include::loft/list-of-figures.adoc[leveloffset=+1]
+
+:sectnums!:
+include::loft/list-of-tables.adoc[leveloffset=+1]
+endif::[]

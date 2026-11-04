@@ -1,0 +1,20 @@
+[#top-scope-scope]
+= Scope
+
+ifndef::include-only-once[]
+:root-path: ../
+include::{root-path}_config.adoc[]
+endif::[]
+
+{THIS_STANDARD} specifies the modeling approach for describing high-fidelity road surfaces (micro-topography) for driving and tire simulation applications.
+The standard has the following scope:
+
+*Data Structure and Representation*
+
+- Specify the Curved Regular Grid (CRG) data format for representing 3D road surface data (elevation, friction, and other properties) relative to a curved reference line.
+- Define the binary and ASCII file formats used to store large-scale, high-resolution surface scans efficiently.
+
+*Tools and APIs*
+
+- Provide a standardized C-API for reading and evaluating CRG data within simulation environments.
+- Provide a MATLAB tool suite for the creation, modification, and validation of ASAM OpenCRG data sets.

@@ -1,0 +1,127 @@
+# Minimal working Antora configuration to publish to GitHub Pages
+# Source: https://docs.antora.org/antora/latest/publish-to-github-pages/  (example 2)
+# Output URL: https://asam-ev.github.io/OpenCRG
+name: Publish with Antora to GitHub Pages
+on:
+  push:
+    branches: [main, master]
+  release:
+    types: [ published ]
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+jobs:
+  build:
+    name: Build OpenCRG documentation and deploy it to gh-pages
+    runs-on: ubuntu-latest
+    services:
+      kroki:
+        image: yuzutech/kroki:0.15.1
+        env:
+          KROKI_MAX_URI_LENGTH: 8000
+          KROKI_BLOCKDIAG_HOST: blockdiag
+          KROKI_MERMAID_HOST: mermaid
+      blockdiag:
+        image: yuzutech/kroki-blockdiag:0.15.1
+      mermaid:
+        image: yuzutech/kroki-mermaid:0.15.1
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - name: Checkout with submodules
+      uses: actions/checkout@v6
+      with:
+         path: repo
+         fetch-depth: 0 # test if depth in fetch history is required
+         submodules: recursive
+
+    - name: Configure Pages
+      uses: actions/configure-pages@v6
+
+    - name: Generate site
+      uses: docker://ghcr.io/asam-ev/project-guide-docker:4
+      with:
+        entrypoint: sh
+        args: repo/doc/antora_sources/run-build.sh
+
+    - name: Upload Artifacts
+      uses: actions/upload-pages-artifact@v5
+      with:
+        path: ./repo/site
+
+  deploy:
+    # Run if it was not triggered from remote OR the remote source was master or main.
+    if: ${{ github.event_name != 'repository_dispatch' || contains(github.event.client_payload.ref, 'master') || contains(github.event.client_payload.ref, 'main') }}
+    # Allow one concurrent deployment
+    concurrency:
+      group: "pages"
+      cancel-in-progress: true
+
+    needs: build
+    permissions:
+      actions: read
+      pages: write
+      id-token: write
+
+    # Deploy to the github-pages environment
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5
+
+  release:
+    # Run if triggered by a published release.
+    if: ${{ github.event_name == 'release' && github.event.action == 'published' }}
+    # Take specification artifact from build job and package into a zip for the release.
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Download specification artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: github-pages
+          path: ./artifact-download
+
+      - name: Extract specification
+        run: |
+          mkdir -p ./specification
+          tar -xf ./artifact-download/artifact.tar -C ./specification
+
+      - name: Create zip archive
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          TAG_NAME="${GITHUB_REF_NAME}"
+          ZIP_NAME="${REPO_NAME}-${TAG_NAME}.zip"
+          
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          
+          zip -r "$ZIP_NAME" \
+          c-api crg-bin crg-txt matlab \
+          specification \
+          LICENSE NOTICE README.md RELEASENOTES \
+          -x ".git/*" ".github/*" "*.gitignore" "*.gitattributes" "*.gitkeep" "*.o" "*.obj" ".a"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v3
+        with:
+          files: ${{ env.ZIP_NAME }}

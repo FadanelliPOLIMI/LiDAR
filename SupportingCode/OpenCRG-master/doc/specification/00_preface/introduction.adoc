@@ -1,0 +1,21 @@
+[#top-preface-introduction]
+= Introduction
+
+ifndef::include-only-once[]
+:root-path: ../
+:imagesdir: {root-path}/_images
+:includedir: {root-path}/_images
+include::{root-path}_config.adoc[]
+endif::[]
+
+:sectnums!:
+
+== Overview
+
+include::1_1_Overview.adoc[]
+
+include::1_2_Conventions.adoc[]
+
+include::1_3_Normative_and_non_norm_stats.adoc[]
+
+include::1_4_Deliverables_of_the_OpenCRG_Spec.adoc[]
